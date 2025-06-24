@@ -1,115 +1,176 @@
-// const express = require("express");
-// const cors = require("cors");
-// const bodyParser = require("body-parser");
-// const { google } = require("googleapis");
-// const nodemailer = require("nodemailer");
+const express = require("express");
+const cors = require("cors");
+const bodyParser = require("body-parser");
+const { google } = require("googleapis");
+const axios = require("axios");
+const crypto = require("crypto");
+require("dotenv").config();
 
-// const app = express();
-// const PORT = process.env.PORT || 4000;
+const app = express();
+const PORT = process.env.PORT || 4000;
 
-// app.use(cors());
-// app.use(bodyParser.json());
+app.use(cors({
+  origin: ["https://project12-sable.vercel.app"], // Add any frontend domains here
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type"],
+}));
+app.use(bodyParser.json());
 
-// // ------------------------
-// // Google Sheets Setup
-// // ------------------------
+// Google Sheets Auth
+const auth = new google.auth.GoogleAuth({
+  keyFile: "./credentials.json",
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"],
+});
 
-// const auth = new google.auth.GoogleAuth({
-//   keyFile: "./credentials.json",
-//   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-// });
+const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
-// const VOLUNTEER_SPREADSHEET_ID = "1h_Gxj7vLK22MraGGik7NCTQ0O53cDVATSBf0PJQ_Eaw"; // Volunteer + Partner
-// const DONATION_SPREADSHEET_ID = "PUT_YOUR_DONATION_SHEET_ID_HERE"; // Replace
+// ============ Volunteer / Partner Sign-up ============
+app.post("/submit", async (req, res) => {
+  const { email, type } = req.body;
 
-// // ------------------------
-// // Email Setup (Gmail Example)
-// // ------------------------
+  if (!email || !type) {
+    return res.status(400).json({ message: "Email and type are required." });
+  }
 
-// const transporter = nodemailer.createTransport({
-//   service: "gmail",
-//   auth: {
-//     user: "yourchessngo@gmail.com", // ✅ Replace
-//     pass: "your_app_password_here", // 🔐 App password
-//   },
-// });
+  try {
+    const client = await auth.getClient();
+    const sheets = google.sheets({ version: "v4", auth: client });
 
-// // ------------------------
-// // Routes
-// // ------------------------
+    const now = new Date().toISOString();
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: "Sheet1!A:C",
+      valueInputOption: "USER_ENTERED",
+      requestBody: {
+        values: [[now, type, email]],
+      },
+    });
 
-// // Volunteers & Partners
-// app.post("/submit", async (req, res) => {
-//   const { email, type } = req.body;
-//   if (!email || !type) {
-//     return res.status(400).json({ message: "Email and type are required." });
-//   }
+    res.status(200).json({ message: "Submitted successfully" });
+  } catch (error) {
+    console.error("❌ Google Sheets error:", error);
+    res.status(500).json({ message: "Failed to submit" });
+  }
+});
 
-//   try {
-//     const client = await auth.getClient();
-//     const sheets = google.sheets({ version: "v4", auth: client });
+// ============ Manual Donation Verification ============
+app.post("/paystack/verify", async (req, res) => {
+  const { reference } = req.body;
 
-//     const now = new Date().toISOString();
-//     await sheets.spreadsheets.values.append({
-//       spreadsheetId: VOLUNTEER_SPREADSHEET_ID,
-//       range: "Sheet1!A:C",
-//       valueInputOption: "USER_ENTERED",
-//       requestBody: {
-//         values: [[now, type, email]],
-//       },
-//     });
+  if (!reference) {
+    return res.status(400).json({ status: "error", message: "Missing reference" });
+  }
 
-//     res.status(200).json({ message: "Submitted successfully" });
-//   } catch (error) {
-//     console.error("❌ Google Sheets Error (submit):", error);
-//     res.status(500).json({ message: "Submission failed" });
-//   }
-// });
+  try {
+    const response = await axios.get(`https://api.paystack.co/transaction/verify/${reference}`, {
+      headers: {
+        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+        "Content-Type": "application/json",
+      },
+    });
 
-// // Donation webhook
-// app.post("/donation-webhook", async (req, res) => {
-//   const { name, email, amount, projects, ref } = req.body;
+    const data = response.data.data;
 
-//   if (!name || !email || !amount || !projects || !ref) {
-//     return res.status(400).json({ message: "Missing donation data" });
-//   }
+    if (data.status === "success") {
+      const client = await auth.getClient();
+      const sheets = google.sheets({ version: "v4", auth: client });
 
-//   try {
-//     const client = await auth.getClient();
-//     const sheets = google.sheets({ version: "v4", auth: client });
+      const now = new Date().toISOString();
+      const name = data.metadata?.custom_fields?.find(f => f.variable_name === "donor_name")?.value || "";
+      const projects = data.metadata?.custom_fields?.find(f => f.variable_name === "projects")?.value || "";
+      const amount = data.amount / 100;
+      const email = data.customer.email;
 
-//     const timestamp = new Date().toISOString();
-//     await sheets.spreadsheets.values.append({
-//       spreadsheetId: DONATION_SPREADSHEET_ID,
-//       range: "Sheet1!A:E",
-//       valueInputOption: "USER_ENTERED",
-//       requestBody: {
-//         values: [[timestamp, name, email, projects.join(", "), amount]],
-//       },
-//     });
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: "Sheet1!A:E",
+        valueInputOption: "USER_ENTERED",
+        requestBody: {
+          values: [[now, name, email, projects, amount]],
+        },
+      });
 
-//     await transporter.sendMail({
-//       from: '"Chess NGO" <yourchessngo@gmail.com>',
-//       to: email,
-//       subject: "Thank you for your donation!",
-//       html: `
-//         <h2>Hi ${name},</h2>
-//         <p>Thank you for your generous donation of ₦${amount}.</p>
-//         <p>You supported: <strong>${projects.join(", ")}</strong></p>
-//         <p>Ref ID: ${ref}</p>
-//         <br />
-//         <p>We truly appreciate your support 🙏</p>
-//         <p>- Chess NGO Team</p>
-//       `,
-//     });
+      return res.status(200).json({
+        status: "success",
+        message: "Transaction verified and recorded.",
+        data: { name, email, projects, amount, reference },
+      });
+    } else {
+      return res.status(400).json({
+        status: "error",
+        message: "Transaction not successful.",
+        data: response.data,
+      });
+    }
+  } catch (error) {
+    console.error("❌ Paystack Verify Error:", error?.response?.data || error.message);
+    return res.status(500).json({
+      status: "error",
+      message: "Verification failed",
+      error: error?.response?.data || error.message,
+    });
+  }
+});
 
-//     res.status(200).json({ message: "Donation recorded and email sent." });
-//   } catch (error) {
-//     console.error("❌ Donation Webhook Error:", error);
-//     res.status(500).json({ message: "Error processing donation" });
-//   }
-// });
+// ============ Webhook for Auto-Verification ============
+app.post("/paystack/webhook", async (req, res) => {
+  const secret = process.env.PAYSTACK_SECRET_KEY;
 
-// app.listen(PORT, () =>
-//   console.log(`🚀 Server running at http://localhost:${PORT}`)
-// );
+  const hash = crypto
+    .createHmac("sha512", secret)
+    .update(JSON.stringify(req.body))
+    .digest("hex");
+
+  if (hash !== req.headers["x-paystack-signature"]) {
+    console.warn("⚠️ Invalid webhook signature");
+    return res.status(401).send("Invalid signature");
+  }
+
+  const event = req.body;
+
+  if (event.event === "charge.success") {
+    const ref = event.data.reference;
+
+    try {
+      const response = await axios.get(`https://api.paystack.co/transaction/verify/${ref}`, {
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      const data = response.data.data;
+
+      if (data.status === "success") {
+        const client = await auth.getClient();
+        const sheets = google.sheets({ version: "v4", auth: client });
+
+        const now = new Date().toISOString();
+        const name = data.metadata?.custom_fields?.find(f => f.variable_name === "donor_name")?.value || "";
+        const projects = data.metadata?.custom_fields?.find(f => f.variable_name === "projects")?.value || "";
+        const amount = data.amount / 100;
+        const email = data.customer.email;
+
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: SPREADSHEET_ID,
+          range: "Sheet1!A:E",
+          valueInputOption: "USER_ENTERED",
+          requestBody: {
+            values: [[now, name, email, projects, amount]],
+          },
+        });
+
+        console.log("✅ Donation recorded via webhook:", ref);
+      }
+    } catch (error) {
+      console.error("❌ Webhook verification error:", error?.response?.data || error.message);
+    }
+  }
+
+  res.sendStatus(200); // Acknowledge Paystack's webhook
+});
+
+// ============ Start Server ============
+app.listen(PORT, () => {
+  console.log(`✅ Server is running at http://localhost:${PORT}`);
+});
