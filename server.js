@@ -10,15 +10,16 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors({
-  origin: ["https://project12-sable.vercel.app"], // Add any frontend domains here
-  methods: ["GET", "POST"],
+  origin: ["https://project12-sable.vercel.app"], // Add your frontend domain here
+  methods: ["GET", "POST", "OPTIONS"],
   allowedHeaders: ["Content-Type"],
 }));
+
 app.use(bodyParser.json());
 
-// Google Sheets Auth
+// Google Sheets Auth (use inline JSON credentials for serverless)
 const auth = new google.auth.GoogleAuth({
-  keyFile: "./credentials.json",
+  credentials: JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT),
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 
@@ -27,7 +28,6 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 // ============ Volunteer / Partner Sign-up ============
 app.post("/submit", async (req, res) => {
   const { email, type } = req.body;
-
   if (!email || !type) {
     return res.status(400).json({ message: "Email and type are required." });
   }
@@ -35,15 +35,13 @@ app.post("/submit", async (req, res) => {
   try {
     const client = await auth.getClient();
     const sheets = google.sheets({ version: "v4", auth: client });
-
     const now = new Date().toISOString();
+
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
       range: "Sheet1!A:C",
       valueInputOption: "USER_ENTERED",
-      requestBody: {
-        values: [[now, type, email]],
-      },
+      requestBody: { values: [[now, type, email]] },
     });
 
     res.status(200).json({ message: "Submitted successfully" });
@@ -56,7 +54,6 @@ app.post("/submit", async (req, res) => {
 // ============ Manual Donation Verification ============
 app.post("/paystack/verify", async (req, res) => {
   const { reference } = req.body;
-
   if (!reference) {
     return res.status(400).json({ status: "error", message: "Missing reference" });
   }
@@ -74,7 +71,6 @@ app.post("/paystack/verify", async (req, res) => {
     if (data.status === "success") {
       const client = await auth.getClient();
       const sheets = google.sheets({ version: "v4", auth: client });
-
       const now = new Date().toISOString();
       const name = data.metadata?.custom_fields?.find(f => f.variable_name === "donor_name")?.value || "";
       const projects = data.metadata?.custom_fields?.find(f => f.variable_name === "projects")?.value || "";
@@ -85,9 +81,7 @@ app.post("/paystack/verify", async (req, res) => {
         spreadsheetId: SPREADSHEET_ID,
         range: "Sheet1!A:E",
         valueInputOption: "USER_ENTERED",
-        requestBody: {
-          values: [[now, name, email, projects, amount]],
-        },
+        requestBody: { values: [[now, name, email, projects, amount]] },
       });
 
       return res.status(200).json({
@@ -96,23 +90,15 @@ app.post("/paystack/verify", async (req, res) => {
         data: { name, email, projects, amount, reference },
       });
     } else {
-      return res.status(400).json({
-        status: "error",
-        message: "Transaction not successful.",
-        data: response.data,
-      });
+      return res.status(400).json({ status: "error", message: "Transaction not successful." });
     }
   } catch (error) {
     console.error("❌ Paystack Verify Error:", error?.response?.data || error.message);
-    return res.status(500).json({
-      status: "error",
-      message: "Verification failed",
-      error: error?.response?.data || error.message,
-    });
+    return res.status(500).json({ status: "error", message: "Verification failed" });
   }
 });
 
-// ============ Webhook for Auto-Verification ============
+// ============ Paystack Webhook ============
 app.post("/paystack/webhook", async (req, res) => {
   const secret = process.env.PAYSTACK_SECRET_KEY;
 
@@ -140,11 +126,9 @@ app.post("/paystack/webhook", async (req, res) => {
       });
 
       const data = response.data.data;
-
       if (data.status === "success") {
         const client = await auth.getClient();
         const sheets = google.sheets({ version: "v4", auth: client });
-
         const now = new Date().toISOString();
         const name = data.metadata?.custom_fields?.find(f => f.variable_name === "donor_name")?.value || "";
         const projects = data.metadata?.custom_fields?.find(f => f.variable_name === "projects")?.value || "";
@@ -155,9 +139,7 @@ app.post("/paystack/webhook", async (req, res) => {
           spreadsheetId: SPREADSHEET_ID,
           range: "Sheet1!A:E",
           valueInputOption: "USER_ENTERED",
-          requestBody: {
-            values: [[now, name, email, projects, amount]],
-          },
+          requestBody: { values: [[now, name, email, projects, amount]] },
         });
 
         console.log("✅ Donation recorded via webhook:", ref);
@@ -167,10 +149,10 @@ app.post("/paystack/webhook", async (req, res) => {
     }
   }
 
-  res.sendStatus(200); // Acknowledge Paystack's webhook
+  res.sendStatus(200);
 });
 
 // ============ Start Server ============
 app.listen(PORT, () => {
-  console.log(`✅ Server is running at http://localhost:${PORT}`);
+  console.log(`✅ Server running on http://localhost:${PORT}`);
 });
