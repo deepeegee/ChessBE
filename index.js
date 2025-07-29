@@ -10,11 +10,16 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors({
-  origin: ["https://project12-sable.vercel.app"], // Add any frontend domains here
+  origin: ["https://project12-sable.vercel.app", "http://www.nscchessclub.com"], // Add any frontend domains here
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type"],
 }));
 app.use(bodyParser.json());
+
+// ============ Ping Endpoint for Pre-warming ============
+app.get('/ping', (req, res) => {
+  res.status(200).send('pong');
+});
 
 // Google Sheets Auth
 const auth = new google.auth.GoogleAuth({
