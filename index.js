@@ -10,7 +10,7 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 app.use(cors({
-  origin: ["https://project12-sable.vercel.app", "http://www.nscchessclub.com"], // Add any frontend domains here
+  origin: ["https://project12-sable.vercel.app", "https://www.nscchessclub.com"], // Add any frontend domains here
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type"],
 }));
